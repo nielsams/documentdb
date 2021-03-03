@@ -2,6 +2,7 @@ package documentdb
 
 import (
 	"bytes"
+	"fmt"
 	"io"
 	"net/http"
 )
@@ -22,7 +23,7 @@ type Client struct {
 	http.Client
 }
 
-func (c *Client) apply(r *Request, opts []CallOption) (err error) { 
+func (c *Client) apply(r *Request, opts []CallOption) (err error) {
 	if err = r.DefaultHeaders(c.Config.MasterKey); err != nil {
 		return err
 	}
@@ -65,8 +66,8 @@ func (c *Client) Query(link string, query *Query, ret interface{}, opts ...CallO
 		return nil, err
 
 	}
-
-	req, err = http.NewRequest(http.MethodPost, c.Url+"/"+link, buf)
+	queryURL := c.getEndpointURL(EndpointType_ReadOnly) + "/" + link
+	req, err = http.NewRequest(http.MethodPost, queryURL, buf)
 	if err != nil {
 		return nil, err
 	}
@@ -123,9 +124,76 @@ func (c *Client) Execute(link string, body, ret interface{}, opts ...CallOption)
 	return c.method(http.MethodPost, link, expectStatusCode(http.StatusOK), ret, buf, opts...)
 }
 
+// GetRegionalEndpoints sets the list of preferred read and write locations.
+// It is called from documentDb.New() if the EnableEndpointDiscovery is set to true
+func (c *Client) GetRegionalEndpoints() error {
+	var (
+		err    error
+		req    *http.Request
+		buf    = buffers.Get().(*bytes.Buffer)
+		epdesc EndpointDescription
+	)
+	buf.Reset()
+	defer buffers.Put(buf)
+
+	req, err = http.NewRequest(http.MethodGet, c.Url+"/", buf)
+	if err != nil {
+		return err
+	}
+	r := ResourceRequest("", req)
+
+	if err = c.apply(r, []CallOption{}); err != nil {
+		return err
+	}
+	r.QueryHeaders(buf.Len())
+
+	_, err = c.do(r, expectStatusCode(http.StatusOK), &epdesc)
+	if err != nil {
+		return err
+	}
+
+	// We set the received region list to the definitive region list as a whole, in case no changes are made for PreferredLocation
+	c.Config.MultiRegionConfig.ReadLocations = epdesc.ReadableLocations
+	c.Config.MultiRegionConfig.WriteLocations = epdesc.WritableLocations
+
+	// We have a preferred region. This region should be moved to the front of the list if it is in the list
+	prefLoc := c.Config.MultiRegionConfig.PreferredLocation
+
+	// For both read and write, we look in the list for the PreferredLocation. If we find it, we move it to the front of the list
+	for i, loc := range epdesc.ReadableLocations {
+		if loc.EndpointName == prefLoc {
+			c.Config.MultiRegionConfig.ReadLocations = nil
+			c.Config.MultiRegionConfig.ReadLocations = append(c.Config.MultiRegionConfig.ReadLocations, epdesc.ReadableLocations[i])
+			c.Config.MultiRegionConfig.ReadLocations = append(c.Config.MultiRegionConfig.ReadLocations, epdesc.ReadableLocations[:i]...)
+			c.Config.MultiRegionConfig.ReadLocations = append(c.Config.MultiRegionConfig.ReadLocations, epdesc.ReadableLocations[i+1:]...)
+		}
+	}
+	for i, loc := range epdesc.WritableLocations {
+		if loc.EndpointName == prefLoc {
+			c.Config.MultiRegionConfig.WriteLocations = nil
+			c.Config.MultiRegionConfig.WriteLocations = append(c.Config.MultiRegionConfig.WriteLocations, epdesc.WritableLocations[i])
+			c.Config.MultiRegionConfig.WriteLocations = append(c.Config.MultiRegionConfig.WriteLocations, epdesc.WritableLocations[:i]...)
+			c.Config.MultiRegionConfig.WriteLocations = append(c.Config.MultiRegionConfig.WriteLocations, epdesc.WritableLocations[i+1:]...)
+		}
+	}
+
+	return nil
+}
+
 // Private generic method resource
 func (c *Client) method(method string, link string, validator statusCodeValidatorFunc, ret interface{}, body *bytes.Buffer, opts ...CallOption) (*Response, error) {
-	req, err := http.NewRequest(method, c.Url+"/"+link, body)
+	var queryURL string
+
+	// With a GET request we only need the read endpoint. For others we get a readwrite endpoint
+	// Note that for 'Query', the queryurl is set elsewhere.
+	switch method {
+	case http.MethodGet:
+		queryURL = c.getEndpointURL(EndpointType_ReadOnly) + "/" + link
+	default:
+		queryURL = c.getEndpointURL(EndpointType_ReadWrite) + "/" + link
+	}
+
+	req, err := http.NewRequest(method, queryURL, body)
 	if err != nil {
 		return nil, err
 	}
@@ -141,6 +209,7 @@ func (c *Client) method(method string, link string, validator statusCodeValidato
 
 // Private Do function, DRY
 func (c *Client) do(r *Request, validator statusCodeValidatorFunc, data interface{}) (*Response, error) {
+	fmt.Println("Outgoing request: ", r.Request.URL)
 	resp, err := c.Do(r.Request)
 	if err != nil {
 		return nil, err
@@ -173,4 +242,22 @@ func stringify(body interface{}) (bt []byte, err error) {
 		bt, err = Serialization.Marshal(t)
 	}
 	return
+}
+
+// getEndpointURL returns the endpoint that will be used in the ongoing call.
+// By specifying either EndpointType_ReadOnly or EndpointType_ReadWrite, we select the top endpoint from that list.
+// If no multiregion config/setup is used, the ReadLocations and WriteLocations lists are empty and the default c.Url will be returned
+func (c *Client) getEndpointURL(endpointType EndpointType) string {
+	switch endpointType {
+
+	case EndpointType_ReadOnly:
+		if len(c.Config.MultiRegionConfig.ReadLocations) > 0 {
+			return c.Config.MultiRegionConfig.ReadLocations[0].EndpointURL
+		}
+	case EndpointType_ReadWrite:
+		if len(c.Config.MultiRegionConfig.WriteLocations) > 0 && c.Config.MultiRegionConfig.UseMultipleWriteLocations {
+			return c.Config.MultiRegionConfig.WriteLocations[0].EndpointURL
+		}
+	}
+	return c.Url
 }

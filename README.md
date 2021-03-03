@@ -74,6 +74,62 @@ func main() {
 }
 ```
 
+### Multiregion example:
+
+```go
+package main
+
+import (
+	"fmt"
+	"github.com/a8m/documentdb"
+)
+
+type TodoItem struct {
+	documentdb.Document
+	Id          string `json:"id,omitempty"`
+	TaskName    string `json:"task_name,omitempty"`
+	Description string `json:"description,omitempty"`
+}
+
+func main() {
+	config := documentdb.NewMultiRegionConfig(
+		// config := documentdb.NewConfig(
+		&documentdb.Key{
+			Key: "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx==",
+		},
+		&documentdb.MultiRegionSettings{
+			EnableEndpointDiscovery:   true, 			// if this is set to false, everything points to the default location
+			UseMultipleWriteLocations: true, 			// if this is set to false, only read requests use the multiregion capability
+			PreferredLocation:         "West Europe", 	// This region will be used for reads and writes, if available
+		},
+	)
+
+	client := documentdb.New("https://xxxxxx.documents.azure.com", config)
+
+	dbs, err := client.ReadDatabases()
+	if err != nil {
+		fmt.Print(err)
+	}
+
+	colls, err := client.ReadCollections(dbs[0].Self)
+	if err != nil {
+		fmt.Println(err)
+	}
+
+	var todoItems []TodoItem
+
+	_, err = client.QueryDocuments(colls[0].Self, documentdb.NewQuery("SELECT * FROM c"), &todoItems)
+	if err != nil {
+		fmt.Println(err)
+	}
+	for _, todo := range todoItems {
+		fmt.Printf("\nTask: %s\nDescription: %s\n\n", todo.TaskName, todo.Description)
+	}
+
+}
+
+```
+
 ### Databases
 
 #### ReadDatabase

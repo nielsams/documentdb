@@ -97,6 +97,9 @@ func (req *Request) QueryHeaders(len int) {
 }
 
 func parse(id string) (rId, rType string) {
+	if len(id) == 0 {
+		return
+	}
 	if strings.HasPrefix(id, "/") == false {
 		id = "/" + id
 	}

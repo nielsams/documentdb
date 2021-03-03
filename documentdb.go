@@ -32,11 +32,20 @@ func DefaultIdentificationHydrator(config *Config, doc interface{}) {
 	}
 }
 
+type MultiRegionSettings struct {
+	EnableEndpointDiscovery   bool
+	PreferredLocation         string
+	UseMultipleWriteLocations bool
+	ReadLocations             []EndpointLocation
+	WriteLocations            []EndpointLocation
+}
+
 type Config struct {
 	MasterKey                  *Key
 	Client                     http.Client
 	IdentificationHydrator     IdentificationHydrator
 	IdentificationPropertyName string
+	MultiRegionConfig          *MultiRegionSettings
 }
 
 func NewConfig(key *Key) *Config {
@@ -44,6 +53,17 @@ func NewConfig(key *Key) *Config {
 		MasterKey:                  key,
 		IdentificationHydrator:     DefaultIdentificationHydrator,
 		IdentificationPropertyName: "Id",
+	}
+}
+
+// NewMultiRegionConfig New version that also takes multiregion settings
+// This was added as a separate function so the existing NewConfig function is not broken
+func NewMultiRegionConfig(key *Key, multiRegionConfig *MultiRegionSettings) *Config {
+	return &Config{
+		MasterKey:                  key,
+		IdentificationHydrator:     DefaultIdentificationHydrator,
+		IdentificationPropertyName: "Id",
+		MultiRegionConfig:          multiRegionConfig,
 	}
 }
 
@@ -65,6 +85,14 @@ func New(url string, config *Config) *DocumentDB {
 	}
 	client.Url = url
 	client.Config = config
+
+	if client.Config.MultiRegionConfig.EnableEndpointDiscovery {
+		err := client.GetRegionalEndpoints()
+		if err != nil {
+			// TODO log this somewhere
+		}
+	}
+
 	return &DocumentDB{client: client, config: config}
 }
 

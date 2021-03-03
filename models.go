@@ -81,3 +81,20 @@ type PartitionKeyRange struct {
 	MinInclusive        string `json:"minInclusive,omitempty"`
 	MaxInclusive        string `json:"maxExclusive,omitempty"`
 }
+
+type EndpointDescription struct {
+	WritableLocations []EndpointLocation `json:"writableLocations,omitempty"`
+	ReadableLocations []EndpointLocation `json:"readableLocations,omitempty"`
+}
+
+type EndpointLocation struct {
+	EndpointName string `json:"Name"`
+	EndpointURL  string `json:"DatabaseAccountEndpoint"`
+}
+
+type EndpointType int
+
+const (
+	EndpointType_ReadOnly  EndpointType = 0
+	EndpointType_ReadWrite EndpointType = 1
+)
