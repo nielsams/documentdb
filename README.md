@@ -93,14 +93,12 @@ type TodoItem struct {
 
 func main() {
 	config := documentdb.NewMultiRegionConfig(
-		// config := documentdb.NewConfig(
 		&documentdb.Key{
-			Key: "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx==",
+			Key: "zuMjHvmPhlVu4nUchnLshqHBk3h8uTO5AA==",
 		},
-		&documentdb.MultiRegionSettings{
-			EnableEndpointDiscovery:   true, 			// if this is set to false, everything points to the default location
-			UseMultipleWriteLocations: true, 			// if this is set to false, only read requests use the multiregion capability
-			PreferredLocation:         "West Europe", 	// This region will be used for reads and writes, if available
+		true,
+		true,
+		"West Europe",
 		},
 	)
 

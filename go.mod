@@ -1,5 +1,7 @@
 module github.com/a8m/documentdb
 
+go 1.15
+
 require (
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/json-iterator/go v1.1.5

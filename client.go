@@ -128,10 +128,10 @@ func (c *Client) Execute(link string, body, ret interface{}, opts ...CallOption)
 // It is called from documentDb.New() if the EnableEndpointDiscovery is set to true
 func (c *Client) GetRegionalEndpoints() error {
 	var (
-		err    error
-		req    *http.Request
-		buf    = buffers.Get().(*bytes.Buffer)
-		epdesc EndpointDescription
+		err          error
+		req          *http.Request
+		buf          = buffers.Get().(*bytes.Buffer)
+		endpointDesc EndpointDescription
 	)
 	buf.Reset()
 	defer buffers.Put(buf)
@@ -147,33 +147,33 @@ func (c *Client) GetRegionalEndpoints() error {
 	}
 	r.QueryHeaders(buf.Len())
 
-	_, err = c.do(r, expectStatusCode(http.StatusOK), &epdesc)
+	_, err = c.do(r, expectStatusCode(http.StatusOK), &endpointDesc)
 	if err != nil {
 		return err
 	}
 
 	// We set the received region list to the definitive region list as a whole, in case no changes are made for PreferredLocation
-	c.Config.MultiRegionConfig.ReadLocations = epdesc.ReadableLocations
-	c.Config.MultiRegionConfig.WriteLocations = epdesc.WritableLocations
+	c.Config.ReadLocations = endpointDesc.ReadableLocations
+	c.Config.WriteLocations = endpointDesc.WritableLocations
 
 	// We have a preferred region. This region should be moved to the front of the list if it is in the list
-	prefLoc := c.Config.MultiRegionConfig.PreferredLocation
+	prefLoc := c.Config.PreferredLocation
 
 	// For both read and write, we look in the list for the PreferredLocation. If we find it, we move it to the front of the list
-	for i, loc := range epdesc.ReadableLocations {
+	for i, loc := range endpointDesc.ReadableLocations {
 		if loc.EndpointName == prefLoc {
-			c.Config.MultiRegionConfig.ReadLocations = nil
-			c.Config.MultiRegionConfig.ReadLocations = append(c.Config.MultiRegionConfig.ReadLocations, epdesc.ReadableLocations[i])
-			c.Config.MultiRegionConfig.ReadLocations = append(c.Config.MultiRegionConfig.ReadLocations, epdesc.ReadableLocations[:i]...)
-			c.Config.MultiRegionConfig.ReadLocations = append(c.Config.MultiRegionConfig.ReadLocations, epdesc.ReadableLocations[i+1:]...)
+			c.Config.ReadLocations = nil
+			c.Config.ReadLocations = append(c.Config.ReadLocations, endpointDesc.ReadableLocations[i])
+			c.Config.ReadLocations = append(c.Config.ReadLocations, endpointDesc.ReadableLocations[:i]...)
+			c.Config.ReadLocations = append(c.Config.ReadLocations, endpointDesc.ReadableLocations[i+1:]...)
 		}
 	}
-	for i, loc := range epdesc.WritableLocations {
+	for i, loc := range endpointDesc.WritableLocations {
 		if loc.EndpointName == prefLoc {
-			c.Config.MultiRegionConfig.WriteLocations = nil
-			c.Config.MultiRegionConfig.WriteLocations = append(c.Config.MultiRegionConfig.WriteLocations, epdesc.WritableLocations[i])
-			c.Config.MultiRegionConfig.WriteLocations = append(c.Config.MultiRegionConfig.WriteLocations, epdesc.WritableLocations[:i]...)
-			c.Config.MultiRegionConfig.WriteLocations = append(c.Config.MultiRegionConfig.WriteLocations, epdesc.WritableLocations[i+1:]...)
+			c.Config.WriteLocations = nil
+			c.Config.WriteLocations = append(c.Config.WriteLocations, endpointDesc.WritableLocations[i])
+			c.Config.WriteLocations = append(c.Config.WriteLocations, endpointDesc.WritableLocations[:i]...)
+			c.Config.WriteLocations = append(c.Config.WriteLocations, endpointDesc.WritableLocations[i+1:]...)
 		}
 	}
 
@@ -251,12 +251,12 @@ func (c *Client) getEndpointURL(endpointType EndpointType) string {
 	switch endpointType {
 
 	case EndpointType_ReadOnly:
-		if len(c.Config.MultiRegionConfig.ReadLocations) > 0 {
-			return c.Config.MultiRegionConfig.ReadLocations[0].EndpointURL
+		if len(c.Config.ReadLocations) > 0 {
+			return c.Config.ReadLocations[0].EndpointURL
 		}
 	case EndpointType_ReadWrite:
-		if len(c.Config.MultiRegionConfig.WriteLocations) > 0 && c.Config.MultiRegionConfig.UseMultipleWriteLocations {
-			return c.Config.MultiRegionConfig.WriteLocations[0].EndpointURL
+		if len(c.Config.WriteLocations) > 0 && c.Config.UseMultipleWriteLocations {
+			return c.Config.WriteLocations[0].EndpointURL
 		}
 	}
 	return c.Url
