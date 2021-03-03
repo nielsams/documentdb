@@ -41,8 +41,6 @@ type Config struct {
 	EnableEndpointDiscovery   bool
 	PreferredLocation         string
 	UseMultipleWriteLocations bool
-	ReadLocations             []EndpointLocation
-	WriteLocations            []EndpointLocation
 }
 
 func NewConfig(key *Key) *Config {
@@ -60,9 +58,10 @@ func NewMultiRegionConfig(key *Key, EnableEndpointDiscovery bool, UseMultipleWri
 		MasterKey:                  key,
 		IdentificationHydrator:     DefaultIdentificationHydrator,
 		IdentificationPropertyName: "Id",
-		EnableEndpointDiscovery:    EnableEndpointDiscovery,
-		UseMultipleWriteLocations:  UseMultipleWriteLocations,
-		PreferredLocation:          PreferredLocation,
+
+		EnableEndpointDiscovery:   EnableEndpointDiscovery,
+		UseMultipleWriteLocations: UseMultipleWriteLocations,
+		PreferredLocation:         PreferredLocation,
 	}
 }
 

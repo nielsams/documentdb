@@ -21,6 +21,9 @@ type Client struct {
 	Url    string
 	Config *Config
 	http.Client
+
+	ReadLocations  []EndpointLocation
+	WriteLocations []EndpointLocation
 }
 
 func (c *Client) apply(r *Request, opts []CallOption) (err error) {
@@ -153,8 +156,8 @@ func (c *Client) GetRegionalEndpoints() error {
 	}
 
 	// We set the received region list to the definitive region list as a whole, in case no changes are made for PreferredLocation
-	c.Config.ReadLocations = endpointDesc.ReadableLocations
-	c.Config.WriteLocations = endpointDesc.WritableLocations
+	c.ReadLocations = endpointDesc.ReadableLocations
+	c.WriteLocations = endpointDesc.WritableLocations
 
 	// We have a preferred region. This region should be moved to the front of the list if it is in the list
 	prefLoc := c.Config.PreferredLocation
@@ -162,18 +165,18 @@ func (c *Client) GetRegionalEndpoints() error {
 	// For both read and write, we look in the list for the PreferredLocation. If we find it, we move it to the front of the list
 	for i, loc := range endpointDesc.ReadableLocations {
 		if loc.EndpointName == prefLoc {
-			c.Config.ReadLocations = nil
-			c.Config.ReadLocations = append(c.Config.ReadLocations, endpointDesc.ReadableLocations[i])
-			c.Config.ReadLocations = append(c.Config.ReadLocations, endpointDesc.ReadableLocations[:i]...)
-			c.Config.ReadLocations = append(c.Config.ReadLocations, endpointDesc.ReadableLocations[i+1:]...)
+			c.ReadLocations = nil
+			c.ReadLocations = append(c.ReadLocations, endpointDesc.ReadableLocations[i])
+			c.ReadLocations = append(c.ReadLocations, endpointDesc.ReadableLocations[:i]...)
+			c.ReadLocations = append(c.ReadLocations, endpointDesc.ReadableLocations[i+1:]...)
 		}
 	}
 	for i, loc := range endpointDesc.WritableLocations {
 		if loc.EndpointName == prefLoc {
-			c.Config.WriteLocations = nil
-			c.Config.WriteLocations = append(c.Config.WriteLocations, endpointDesc.WritableLocations[i])
-			c.Config.WriteLocations = append(c.Config.WriteLocations, endpointDesc.WritableLocations[:i]...)
-			c.Config.WriteLocations = append(c.Config.WriteLocations, endpointDesc.WritableLocations[i+1:]...)
+			c.WriteLocations = nil
+			c.WriteLocations = append(c.WriteLocations, endpointDesc.WritableLocations[i])
+			c.WriteLocations = append(c.WriteLocations, endpointDesc.WritableLocations[:i]...)
+			c.WriteLocations = append(c.WriteLocations, endpointDesc.WritableLocations[i+1:]...)
 		}
 	}
 
@@ -251,12 +254,12 @@ func (c *Client) getEndpointURL(endpointType EndpointType) string {
 	switch endpointType {
 
 	case EndpointType_ReadOnly:
-		if len(c.Config.ReadLocations) > 0 {
-			return c.Config.ReadLocations[0].EndpointURL
+		if len(c.ReadLocations) > 0 {
+			return c.ReadLocations[0].EndpointURL
 		}
 	case EndpointType_ReadWrite:
-		if len(c.Config.WriteLocations) > 0 && c.Config.UseMultipleWriteLocations {
-			return c.Config.WriteLocations[0].EndpointURL
+		if len(c.WriteLocations) > 0 && c.Config.UseMultipleWriteLocations {
+			return c.WriteLocations[0].EndpointURL
 		}
 	}
 	return c.Url
