@@ -12,11 +12,12 @@ import (
 	"net/http"
 	"reflect"
 	"sync"
+	"time"
 )
 
 const (
 	DEFAULT_RETRYOPTIONS_REQUESTTIMEOUTSEC          = 10
-	DEFAULT_RETRYOPTIONS_RETRYCOUNT                 = 3
+	DEFAULT_RETRYOPTIONS_RETRYCOUNT                 = 2
 	DEFAULT_RETRYOPTIONS_ENDPOINTUNAVAILABLETIMESEC = 300
 )
 
@@ -81,6 +82,7 @@ func NewMultiRegionConfig(key *Key, RegionalOptions *RegionalOptions, RetryOptio
 	}
 
 	return &Config{
+		Client:                     http.Client{Timeout: time.Duration(RetryOptions.RequestTimeoutSec) * time.Second},
 		MasterKey:                  key,
 		IdentificationHydrator:     DefaultIdentificationHydrator,
 		IdentificationPropertyName: "Id",

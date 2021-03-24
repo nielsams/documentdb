@@ -87,14 +87,14 @@ func (c *Client) Query(link string, query *Query, ret interface{}, opts ...CallO
 	r.QueryHeaders(buf.Len())
 
 	/////////////////////
-	testCount++
-	if testCount == 5 {
-		c.MarkEndpointUnavailable(endpoint)
-		fmt.Printf("Read locations: \n")
-		for _, loc := range c.ReadLocations {
-			fmt.Printf("Location: %s, URL: %s, IsUnavailable: %t\n", loc.EndpointName, loc.EndpointURL, loc.IsUnavailable)
-		}
-	}
+	// testCount++
+	// if testCount == 5 {
+	// 	c.markEndpointUnavailable(endpoint)
+	// 	fmt.Printf("Read locations: \n")
+	// 	for _, loc := range c.ReadLocations {
+	// 		fmt.Printf("Location: %s, URL: %s, IsUnavailable: %t\n", loc.EndpointName, loc.EndpointURL, loc.IsUnavailable)
+	// 	}
+	// }
 
 	/////////////////////
 
@@ -207,6 +207,30 @@ func stringify(body interface{}) (bt []byte, err error) {
 	return
 }
 
+func (c *Client) shouldRetry(statusCode int, currentAttempt *int, currentEndpoint *CosmosEndpoint) bool {
+	// CosmosDB has many different status codes as input for the retry decision.
+	// See https://docs.microsoft.com/en-us/rest/api/cosmos-db/http-status-codes-for-cosmosdb for details
+
+	// We don't retry 400 - 413. They are unlikely to change on the next attempt and indicate an invalid request
+	if statusCode >= 400 && statusCode <= 413 {
+		return false
+	}
+
+	// For other errors, we will retry until the set retryCount
+	if *currentAttempt <= c.Config.RetryOptions.RetryCount {
+		return true
+	}
+
+	// We've reached the retryCount. Failover to another region and retry there.
+	if *currentAttempt > c.Config.RetryOptions.RetryCount && *currentAttempt < (2*c.Config.RetryOptions.RetryCount) {
+		fmt.Printf("Connecting to endpoint %s failed, failing over to next.\n", currentEndpoint.EndpointName)
+		c.markEndpointUnavailable(currentEndpoint)
+		return true
+	}
+
+	return false
+}
+
 // GetRegionalEndpoints sets the list of preferred read and write locations.
 // It is called from documentDb.New() if the EnableEndpointDiscovery is set to true
 func (c *Client) GetRegionalEndpoints() error {
@@ -260,15 +284,6 @@ func (c *Client) GetRegionalEndpoints() error {
 		}
 	}
 
-	fmt.Printf("Read locations: \n")
-	for _, loc := range c.ReadLocations {
-		fmt.Printf("Location: %s, URL: %s, IsUnavailable: %t\n", loc.EndpointName, loc.EndpointURL, loc.IsUnavailable)
-	}
-	fmt.Printf("Write locations: \n")
-	for _, loc := range c.WriteLocations {
-		fmt.Printf("Location: %s, URL: %s, IsUnavailable: %t\n", loc.EndpointName, loc.EndpointURL, loc.IsUnavailable)
-	}
-
 	return nil
 }
 
@@ -303,7 +318,7 @@ func (c *Client) getCosmosEndpoint(endpointType EndpointType) *CosmosEndpoint {
 
 // Calling this function means that the endpoint should currently be considered 'down' and taken out of rotation.
 // We set a timestamp on that unavailability so we can add it back when that time expires.
-func (c *Client) MarkEndpointUnavailable(endpoint *CosmosEndpoint) {
+func (c *Client) markEndpointUnavailable(endpoint *CosmosEndpoint) {
 
 	// We don't do this to the default endpoint, because then we might have no endpoints left.
 	if endpoint.IsDefaultEndpoint {
