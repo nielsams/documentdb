@@ -83,13 +83,16 @@ type PartitionKeyRange struct {
 }
 
 type EndpointDescription struct {
-	WritableLocations []EndpointLocation `json:"writableLocations,omitempty"`
-	ReadableLocations []EndpointLocation `json:"readableLocations,omitempty"`
+	WritableLocations []CosmosEndpoint `json:"writableLocations,omitempty"`
+	ReadableLocations []CosmosEndpoint `json:"readableLocations,omitempty"`
 }
 
-type EndpointLocation struct {
-	EndpointName string `json:"Name"`
-	EndpointURL  string `json:"DatabaseAccountEndpoint"`
+type CosmosEndpoint struct {
+	IsDefaultEndpoint    bool
+	EndpointName         string `json:"Name"`
+	EndpointURL          string `json:"DatabaseAccountEndpoint"`
+	IsUnavailable        bool
+	UnavailableTimestamp int64
 }
 
 type EndpointType int

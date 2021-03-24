@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"time"
 )
 
 type Clienter interface {
@@ -17,13 +18,15 @@ type Clienter interface {
 	Execute(link string, body, ret interface{}, opts ...CallOption) (*Response, error)
 }
 
+var testCount int
+
 type Client struct {
-	Url    string
 	Config *Config
 	http.Client
 
-	ReadLocations  []EndpointLocation
-	WriteLocations []EndpointLocation
+	DefaultEndpoint *CosmosEndpoint
+	ReadLocations   []CosmosEndpoint
+	WriteLocations  []CosmosEndpoint
 }
 
 func (c *Client) apply(r *Request, opts []CallOption) (err error) {
@@ -69,7 +72,8 @@ func (c *Client) Query(link string, query *Query, ret interface{}, opts ...CallO
 		return nil, err
 
 	}
-	queryURL := c.getEndpointURL(EndpointType_ReadOnly) + "/" + link
+	endpoint := c.getCosmosEndpoint(EndpointType_ReadOnly)
+	queryURL := endpoint.EndpointURL + "/" + link
 	req, err = http.NewRequest(http.MethodPost, queryURL, buf)
 	if err != nil {
 		return nil, err
@@ -81,6 +85,18 @@ func (c *Client) Query(link string, query *Query, ret interface{}, opts ...CallO
 	}
 
 	r.QueryHeaders(buf.Len())
+
+	/////////////////////
+	testCount++
+	if testCount == 5 {
+		c.MarkEndpointUnavailable(endpoint)
+		fmt.Printf("Read locations: \n")
+		for _, loc := range c.ReadLocations {
+			fmt.Printf("Location: %s, URL: %s, IsUnavailable: %t\n", loc.EndpointName, loc.EndpointURL, loc.IsUnavailable)
+		}
+	}
+
+	/////////////////////
 
 	return c.do(r, expectStatusCode(http.StatusOK), ret)
 }
@@ -127,62 +143,6 @@ func (c *Client) Execute(link string, body, ret interface{}, opts ...CallOption)
 	return c.method(http.MethodPost, link, expectStatusCode(http.StatusOK), ret, buf, opts...)
 }
 
-// GetRegionalEndpoints sets the list of preferred read and write locations.
-// It is called from documentDb.New() if the EnableEndpointDiscovery is set to true
-func (c *Client) GetRegionalEndpoints() error {
-	var (
-		err          error
-		req          *http.Request
-		buf          = buffers.Get().(*bytes.Buffer)
-		endpointDesc EndpointDescription
-	)
-	buf.Reset()
-	defer buffers.Put(buf)
-
-	req, err = http.NewRequest(http.MethodGet, c.Url+"/", buf)
-	if err != nil {
-		return err
-	}
-	r := ResourceRequest("", req)
-
-	if err = c.apply(r, []CallOption{}); err != nil {
-		return err
-	}
-	r.QueryHeaders(buf.Len())
-
-	_, err = c.do(r, expectStatusCode(http.StatusOK), &endpointDesc)
-	if err != nil {
-		return err
-	}
-
-	// We set the received region list to the definitive region list as a whole, in case no changes are made for PreferredLocation
-	c.ReadLocations = endpointDesc.ReadableLocations
-	c.WriteLocations = endpointDesc.WritableLocations
-
-	// We have a preferred region. This region should be moved to the front of the list if it is in the list
-	prefLoc := c.Config.PreferredLocation
-
-	// For both read and write, we look in the list for the PreferredLocation. If we find it, we move it to the front of the list
-	for i, loc := range endpointDesc.ReadableLocations {
-		if loc.EndpointName == prefLoc {
-			c.ReadLocations = nil
-			c.ReadLocations = append(c.ReadLocations, endpointDesc.ReadableLocations[i])
-			c.ReadLocations = append(c.ReadLocations, endpointDesc.ReadableLocations[:i]...)
-			c.ReadLocations = append(c.ReadLocations, endpointDesc.ReadableLocations[i+1:]...)
-		}
-	}
-	for i, loc := range endpointDesc.WritableLocations {
-		if loc.EndpointName == prefLoc {
-			c.WriteLocations = nil
-			c.WriteLocations = append(c.WriteLocations, endpointDesc.WritableLocations[i])
-			c.WriteLocations = append(c.WriteLocations, endpointDesc.WritableLocations[:i]...)
-			c.WriteLocations = append(c.WriteLocations, endpointDesc.WritableLocations[i+1:]...)
-		}
-	}
-
-	return nil
-}
-
 // Private generic method resource
 func (c *Client) method(method string, link string, validator statusCodeValidatorFunc, ret interface{}, body *bytes.Buffer, opts ...CallOption) (*Response, error) {
 	var queryURL string
@@ -191,9 +151,9 @@ func (c *Client) method(method string, link string, validator statusCodeValidato
 	// Note that for 'Query', the queryurl is set elsewhere.
 	switch method {
 	case http.MethodGet:
-		queryURL = c.getEndpointURL(EndpointType_ReadOnly) + "/" + link
+		queryURL = c.getCosmosEndpoint(EndpointType_ReadOnly).EndpointURL + "/" + link
 	default:
-		queryURL = c.getEndpointURL(EndpointType_ReadWrite) + "/" + link
+		queryURL = c.getCosmosEndpoint(EndpointType_ReadWrite).EndpointURL + "/" + link
 	}
 
 	req, err := http.NewRequest(method, queryURL, body)
@@ -247,20 +207,134 @@ func stringify(body interface{}) (bt []byte, err error) {
 	return
 }
 
-// getEndpointURL returns the endpoint that will be used in the ongoing call.
-// By specifying either EndpointType_ReadOnly or EndpointType_ReadWrite, we select the top endpoint from that list.
-// If no multiregion config/setup is used, the ReadLocations and WriteLocations lists are empty and the default c.Url will be returned
-func (c *Client) getEndpointURL(endpointType EndpointType) string {
+// GetRegionalEndpoints sets the list of preferred read and write locations.
+// It is called from documentDb.New() if the EnableEndpointDiscovery is set to true
+func (c *Client) GetRegionalEndpoints() error {
+	var (
+		err                  error
+		req                  *http.Request
+		buf                  = buffers.Get().(*bytes.Buffer)
+		endpointResponseBody EndpointDescription
+	)
+	buf.Reset()
+	defer buffers.Put(buf)
+
+	req, err = http.NewRequest(http.MethodGet, c.DefaultEndpoint.EndpointURL+"/", buf)
+	if err != nil {
+		return err
+	}
+	r := ResourceRequest("", req)
+
+	if err = c.apply(r, []CallOption{}); err != nil {
+		return err
+	}
+	r.QueryHeaders(buf.Len())
+
+	_, err = c.do(r, expectStatusCode(http.StatusOK), &endpointResponseBody)
+	if err != nil {
+		return err
+	}
+
+	// We set the received region list to the definitive region list as a whole, in case no changes are made for PreferredLocation
+	c.ReadLocations = endpointResponseBody.ReadableLocations
+	c.WriteLocations = endpointResponseBody.WritableLocations
+
+	// We have a preferred region. This region should be moved to the front of the list if it is in the list
+	prefLoc := c.Config.RegionalOptions.PreferredLocation
+
+	// For both read and write, we look in the list for the PreferredLocation. If we find it, we move it to the front of the list
+	for i, loc := range endpointResponseBody.ReadableLocations {
+		if loc.EndpointName == prefLoc {
+			c.ReadLocations = nil
+			c.ReadLocations = append(c.ReadLocations, endpointResponseBody.ReadableLocations[i])
+			c.ReadLocations = append(c.ReadLocations, endpointResponseBody.ReadableLocations[:i]...)
+			c.ReadLocations = append(c.ReadLocations, endpointResponseBody.ReadableLocations[i+1:]...)
+		}
+	}
+	for i, loc := range endpointResponseBody.WritableLocations {
+		if loc.EndpointName == prefLoc {
+			c.WriteLocations = nil
+			c.WriteLocations = append(c.WriteLocations, endpointResponseBody.WritableLocations[i])
+			c.WriteLocations = append(c.WriteLocations, endpointResponseBody.WritableLocations[:i]...)
+			c.WriteLocations = append(c.WriteLocations, endpointResponseBody.WritableLocations[i+1:]...)
+		}
+	}
+
+	fmt.Printf("Read locations: \n")
+	for _, loc := range c.ReadLocations {
+		fmt.Printf("Location: %s, URL: %s, IsUnavailable: %t\n", loc.EndpointName, loc.EndpointURL, loc.IsUnavailable)
+	}
+	fmt.Printf("Write locations: \n")
+	for _, loc := range c.WriteLocations {
+		fmt.Printf("Location: %s, URL: %s, IsUnavailable: %t\n", loc.EndpointName, loc.EndpointURL, loc.IsUnavailable)
+	}
+
+	return nil
+}
+
+// getCosmosEndpoint returns the endpoint that will be used in the ongoing call.
+// By specifying either EndpointType_ReadOnly or EndpointType_ReadWrite, we select the top endpoint from that list that is not unavailable.
+// If no multiregion config/setup is used, the ReadLocations and WriteLocations lists are empty and the default c.DefaultEndpoint will be returned
+func (c *Client) getCosmosEndpoint(endpointType EndpointType) *CosmosEndpoint {
+
+	// First we need to mark endpoints available again if needed
+	c.purgeStaleEndpointUnavailability()
+
 	switch endpointType {
 
 	case EndpointType_ReadOnly:
-		if len(c.ReadLocations) > 0 {
-			return c.ReadLocations[0].EndpointURL
+		for i, endpoint := range c.ReadLocations {
+			if !endpoint.IsUnavailable {
+				return &c.ReadLocations[i]
+			}
 		}
+
 	case EndpointType_ReadWrite:
-		if len(c.WriteLocations) > 0 && c.Config.UseMultipleWriteLocations {
-			return c.WriteLocations[0].EndpointURL
+		for i, endpoint := range c.WriteLocations {
+			if !endpoint.IsUnavailable && c.Config.RegionalOptions.UseMultipleWriteLocations {
+				return &c.WriteLocations[i]
+			}
 		}
 	}
-	return c.Url
+
+	// We always fall back on the default endpoint, which should always be working for read and write
+	return c.DefaultEndpoint
+}
+
+// Calling this function means that the endpoint should currently be considered 'down' and taken out of rotation.
+// We set a timestamp on that unavailability so we can add it back when that time expires.
+func (c *Client) MarkEndpointUnavailable(endpoint *CosmosEndpoint) {
+
+	// We don't do this to the default endpoint, because then we might have no endpoints left.
+	if endpoint.IsDefaultEndpoint {
+		return
+	}
+
+	fmt.Printf("Marking endpoint %s as unavailable\n", endpoint.EndpointName)
+	endpoint.IsUnavailable = true
+	endpoint.UnavailableTimestamp = time.Now().Unix()
+}
+
+// purgeStaleEndpointUnavailability looks at every unavailable endpoint and determines if it should still be unavailable
+// If the default unavailable time has passed
+func (c *Client) purgeStaleEndpointUnavailability() {
+	for i, endpoint := range c.ReadLocations {
+		if endpoint.IsUnavailable {
+			if time.Now().Unix()-(endpoint.UnavailableTimestamp) > int64(c.Config.RetryOptions.EndpointUnavailableTimeSec) {
+				fmt.Printf("Marking endpoint %s available again\n", endpoint.EndpointName)
+				c.ReadLocations[i].IsUnavailable = false
+				c.ReadLocations[i].UnavailableTimestamp = 0
+			}
+		}
+	}
+
+	for i, endpoint := range c.WriteLocations {
+		if endpoint.IsUnavailable {
+			if time.Now().Unix()-(endpoint.UnavailableTimestamp) > int64(c.Config.RetryOptions.EndpointUnavailableTimeSec) {
+				fmt.Printf("Marking endpoint %s available again\n", endpoint.EndpointName)
+				c.WriteLocations[i].IsUnavailable = false
+				c.WriteLocations[i].UnavailableTimestamp = 0
+			}
+		}
+	}
 }

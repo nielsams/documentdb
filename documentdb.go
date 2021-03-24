@@ -14,6 +14,12 @@ import (
 	"sync"
 )
 
+const (
+	DEFAULT_RETRYOPTIONS_REQUESTTIMEOUTSEC          = 10
+	DEFAULT_RETRYOPTIONS_RETRYCOUNT                 = 3
+	DEFAULT_RETRYOPTIONS_ENDPOINTUNAVAILABLETIMESEC = 300
+)
+
 var buffers = &sync.Pool{
 	New: func() interface{} {
 		return bytes.NewBuffer([]byte{})
@@ -37,10 +43,20 @@ type Config struct {
 	Client                     http.Client
 	IdentificationHydrator     IdentificationHydrator
 	IdentificationPropertyName string
+	RegionalOptions            *RegionalOptions
+	RetryOptions               *RetryOptions
+}
 
+type RegionalOptions struct {
 	EnableEndpointDiscovery   bool
 	PreferredLocation         string
 	UseMultipleWriteLocations bool
+}
+
+type RetryOptions struct {
+	RequestTimeoutSec          int
+	RetryCount                 int
+	EndpointUnavailableTimeSec int
 }
 
 func NewConfig(key *Key) *Config {
@@ -53,15 +69,23 @@ func NewConfig(key *Key) *Config {
 
 // NewMultiRegionConfig New version that also takes multiregion settings
 // This was added as a separate function so the existing NewConfig function is not broken
-func NewMultiRegionConfig(key *Key, EnableEndpointDiscovery bool, UseMultipleWriteLocations bool, PreferredLocation string) *Config {
+func NewMultiRegionConfig(key *Key, RegionalOptions *RegionalOptions, RetryOptions *RetryOptions) *Config {
+	if RetryOptions.RequestTimeoutSec == 0 {
+		RetryOptions.RequestTimeoutSec = DEFAULT_RETRYOPTIONS_REQUESTTIMEOUTSEC
+	}
+	if RetryOptions.EndpointUnavailableTimeSec == 0 {
+		RetryOptions.EndpointUnavailableTimeSec = DEFAULT_RETRYOPTIONS_ENDPOINTUNAVAILABLETIMESEC
+	}
+	if RetryOptions.RetryCount == 0 {
+		RetryOptions.RetryCount = DEFAULT_RETRYOPTIONS_RETRYCOUNT
+	}
+
 	return &Config{
 		MasterKey:                  key,
 		IdentificationHydrator:     DefaultIdentificationHydrator,
 		IdentificationPropertyName: "Id",
-
-		EnableEndpointDiscovery:   EnableEndpointDiscovery,
-		UseMultipleWriteLocations: UseMultipleWriteLocations,
-		PreferredLocation:         PreferredLocation,
+		RegionalOptions:            RegionalOptions,
+		RetryOptions:               RetryOptions,
 	}
 }
 
@@ -81,10 +105,13 @@ func New(url string, config *Config) *DocumentDB {
 	client := &Client{
 		Client: config.Client,
 	}
-	client.Url = url
+	client.DefaultEndpoint = &CosmosEndpoint{
+		IsDefaultEndpoint: true,
+		EndpointURL:       url,
+	}
 	client.Config = config
 
-	if client.Config.EnableEndpointDiscovery {
+	if client.Config.RegionalOptions.EnableEndpointDiscovery {
 		err := client.GetRegionalEndpoints()
 		if err != nil {
 			// TODO log this somewhere
