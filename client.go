@@ -85,20 +85,7 @@ func (c *Client) Query(link string, query *Query, ret interface{}, opts ...CallO
 	}
 
 	r.QueryHeaders(buf.Len())
-
-	/////////////////////
-	// testCount++
-	// if testCount == 5 {
-	// 	c.markEndpointUnavailable(endpoint)
-	// 	fmt.Printf("Read locations: \n")
-	// 	for _, loc := range c.ReadLocations {
-	// 		fmt.Printf("Location: %s, URL: %s, IsUnavailable: %t\n", loc.EndpointName, loc.EndpointURL, loc.IsUnavailable)
-	// 	}
-	// }
-
-	/////////////////////
-
-	return c.do(r, expectStatusCode(http.StatusOK), ret)
+	return c.do(r, expectStatusCode(http.StatusOK), ret, endpoint)
 }
 
 // Create resource
@@ -146,14 +133,17 @@ func (c *Client) Execute(link string, body, ret interface{}, opts ...CallOption)
 // Private generic method resource
 func (c *Client) method(method string, link string, validator statusCodeValidatorFunc, ret interface{}, body *bytes.Buffer, opts ...CallOption) (*Response, error) {
 	var queryURL string
+	var endpoint *CosmosEndpoint
 
 	// With a GET request we only need the read endpoint. For others we get a readwrite endpoint
 	// Note that for 'Query', the queryurl is set elsewhere.
 	switch method {
 	case http.MethodGet:
-		queryURL = c.getCosmosEndpoint(EndpointType_ReadOnly).EndpointURL + "/" + link
+		endpoint = c.getCosmosEndpoint(EndpointType_ReadOnly)
+		queryURL = endpoint.EndpointURL + "/" + link
 	default:
-		queryURL = c.getCosmosEndpoint(EndpointType_ReadWrite).EndpointURL + "/" + link
+		endpoint = c.getCosmosEndpoint(EndpointType_ReadWrite)
+		queryURL = endpoint.EndpointURL + "/" + link
 	}
 
 	req, err := http.NewRequest(method, queryURL, body)
@@ -167,26 +157,50 @@ func (c *Client) method(method string, link string, validator statusCodeValidato
 		return nil, err
 	}
 
-	return c.do(r, validator, ret)
+	return c.do(r, validator, ret, endpoint)
+
 }
 
 // Private Do function, DRY
-func (c *Client) do(r *Request, validator statusCodeValidatorFunc, data interface{}) (*Response, error) {
-	fmt.Println("Outgoing request: ", r.Request.URL)
-	resp, err := c.Do(r.Request)
-	if err != nil {
-		return nil, err
+func (c *Client) do(r *Request, validator statusCodeValidatorFunc, data interface{}, endpoint *CosmosEndpoint) (*Response, error) {
+	var (
+		resp               *http.Response
+		err                error
+		currentAttempt     int = 0
+		responseStatusCode int = 0
+	)
+	for {
+		currentAttempt++
+		fmt.Printf("Attempt %d outgoing request to %s\n", currentAttempt, r.Request.URL)
+
+		resp, err = c.Do(r.Request)
+
+		// Happy path response:
+		if err == nil && validator(resp.StatusCode) {
+			if data == nil {
+				return nil, nil
+			}
+			return &Response{resp.Header}, readJson(resp.Body, data)
+		}
+
+		if resp != nil {
+			responseStatusCode = resp.StatusCode
+			// There was a response, but not the statuscode that was expected
+			if !validator(resp.StatusCode) {
+				err = &RequestError{}
+				readJson(resp.Body, &err)
+			}
+			resp.Body.Close()
+		}
+
+		// If there are no more retries, break out of the loop and return to caller
+		if !c.shouldRetry(responseStatusCode, &currentAttempt, endpoint) {
+			break
+		}
 	}
-	if !validator(resp.StatusCode) {
-		err = &RequestError{}
-		readJson(resp.Body, &err)
-		return nil, err
-	}
-	defer resp.Body.Close()
-	if data == nil {
-		return nil, nil
-	}
-	return &Response{resp.Header}, readJson(resp.Body, data)
+
+	// This is the fall through case where the request was not successful and we won't retry (anymore)
+	return nil, err
 }
 
 // Read json response to given interface(struct, map, ..)
@@ -217,15 +231,14 @@ func (c *Client) shouldRetry(statusCode int, currentAttempt *int, currentEndpoin
 	}
 
 	// For other errors, we will retry until the set retryCount
-	if *currentAttempt <= c.Config.RetryOptions.RetryCount {
+	if *currentAttempt < c.Config.RetryOptions.RetryCount {
 		return true
 	}
 
-	// We've reached the retryCount. Failover to another region and retry there.
-	if *currentAttempt > c.Config.RetryOptions.RetryCount && *currentAttempt < (2*c.Config.RetryOptions.RetryCount) {
-		fmt.Printf("Connecting to endpoint %s failed, failing over to next.\n", currentEndpoint.EndpointName)
+	// We've reached the retryCount. Marking region unhealthy and not retrying there for now.
+	if *currentAttempt == c.Config.RetryOptions.RetryCount && !currentEndpoint.IsDefaultEndpoint {
+		fmt.Printf("Connecting to endpoint %s failed, marking it as unavailable.\n", currentEndpoint.EndpointName)
 		c.markEndpointUnavailable(currentEndpoint)
-		return true
 	}
 
 	return false
@@ -254,7 +267,7 @@ func (c *Client) GetRegionalEndpoints() error {
 	}
 	r.QueryHeaders(buf.Len())
 
-	_, err = c.do(r, expectStatusCode(http.StatusOK), &endpointResponseBody)
+	_, err = c.do(r, expectStatusCode(http.StatusOK), &endpointResponseBody, c.DefaultEndpoint)
 	if err != nil {
 		return err
 	}
@@ -325,7 +338,6 @@ func (c *Client) markEndpointUnavailable(endpoint *CosmosEndpoint) {
 		return
 	}
 
-	fmt.Printf("Marking endpoint %s as unavailable\n", endpoint.EndpointName)
 	endpoint.IsUnavailable = true
 	endpoint.UnavailableTimestamp = time.Now().Unix()
 }
